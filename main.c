@@ -126,14 +126,14 @@ void info_init(char *dev) {
     if ((super_block = malloc(sizeof(struct ext2_super_block))) == NULL) {
         goto err;
     }
-    memcpy(super_block, buf, BLK_SIZE);
+    memcpy(super_block, buf, sizeof(struct ext2_super_block));
 
     read_block(2, buf);
     if ((group_desc = malloc(sizeof(struct ext2_group_desc))) == NULL) {
         free(super_block);
         goto err;
     }
-    memcpy(group_desc, buf, BLK_SIZE);
+    memcpy(group_desc, buf, sizeof(struct ext2_group_desc));
 
     return;
 
