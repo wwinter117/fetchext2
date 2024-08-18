@@ -1,10 +1,10 @@
 #ifndef FETCHEXT2_EXT2_H
 #define FETCHEXT2_EXT2_H
 
-typedef unsigned char  u8;
+typedef unsigned char u8;
 typedef unsigned short u16;
-typedef unsigned int   u32;
-typedef unsigned long  u64;
+typedef unsigned int u32;
+typedef unsigned long u64;
 
 struct ext2_super_block {
     u32 s_inodes_count;         /* Inodes count */
@@ -161,4 +161,26 @@ struct ext2_inode {
     } osd2;            /* OS dependent 2 */
 };
 
+#define EXT2_FT_UNKNOWN  0
+#define EXT2_FT_REG_FILE 1
+#define EXT2_FT_DIR      2
+#define EXT2_FT_CHRDEV   3
+#define EXT2_FT_BLKDEV   4
+#define EXT2_FT_FIFO     5
+#define EXT2_FT_SOCK     6
+#define EXT2_FT_SYMLINK  7
+
+struct ext2_dir_entry {
+    u32 inode;          /* Inode number of the entry */
+    u16 rec_len;        /* Length of this directory entry */
+    u8 name_len;        /* Length of the file name */
+    u8 file_type;       /* File type (if applicable) */
+    char name[];        /* File name (not null-terminated) */
+};
+
+struct ext2_info {
+    struct ext2_super_block *super_block;
+    int block_size;
+    int gd_num;
+};
 #endif //FETCHEXT2_EXT2_H
