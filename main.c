@@ -15,11 +15,10 @@
 #include "ext2.h"
 
 #define MIN_BLOCK_SIZE (1 << 10)
-#define GROUP_DESC_PER_BLK (BLOCK_SIZE / sizeof(struct ext2_group_desc))
+
+#define GROUP_DESC_PER_BLK (int)(BLOCK_SIZE / sizeof(struct ext2_group_desc))
 #define GROUP_DESC_SIZE (sizeof(struct ext2_group_desc))
-#define DIR_ENTRY_PER_BLK (BLOCK_SIZE / sizeof(struct ext2_dir_entry))
-#define DIR_ENTRY_SIZE (sizeof(struct ext2_dir_entry))
-#define INODE_PER_BLK (BLOCK_SIZE / sizeof(struct ext2_inode))
+#define INODE_PER_BLK (int)(BLOCK_SIZE / sizeof(struct ext2_inode))
 #define INODE_SIZE (sizeof(struct ext2_inode))
 
 int fd;
@@ -32,6 +31,65 @@ void ls_imap(int block_no);
 void ls_bmap(int block_no);
 
 void ls_dirs(int block_no);
+
+/*
+ * read a block data to a malloced buf, do not forget free it after used
+ */
+char *read_block(int blk_no) {
+    char *buf;
+    if (lseek(fd, BLOCK_SIZE * blk_no, SEEK_SET) < 0) {
+        goto err;
+    }
+    if ((buf = malloc(BLOCK_SIZE)) == NULL) {
+        goto err;
+    }
+    if ((read(fd, buf, BLOCK_SIZE)) != BLOCK_SIZE) {
+        free(buf);
+        goto err;
+    }
+    return buf;
+
+    err:
+    perror("read_block");
+    close(fd);
+    exit(EXIT_FAILURE);
+}
+
+struct ext2_group_desc *
+get_gd(int gd_no) {
+    gd_no -= 1;
+    char *buf;
+    int blk_no, blk_off;
+    struct ext2_group_desc *gd;
+    blk_no = (int) fs_info.super_block->s_first_data_block + 1 + gd_no;
+    blk_off = (int) ((gd_no % GROUP_DESC_PER_BLK) * GROUP_DESC_SIZE);
+    buf = read_block(blk_no);
+    gd = malloc(GROUP_DESC_SIZE);
+    memcpy(gd, buf + blk_off, GROUP_DESC_SIZE);
+    free(buf);
+    return gd;
+}
+
+struct ext2_inode *
+get_inode(int gd_no, int inode_no) {
+    char *buf;
+    int blk_no, blk_off;
+    struct ext2_group_desc *gd;
+    struct ext2_inode *ip;
+    gd = get_gd(gd_no);
+    int inode_table = (int) gd->bg_inode_table;
+    free(gd);
+
+    blk_no = inode_table + (inode_no - 1) / INODE_PER_BLK;
+    blk_off = inode_no % INODE_PER_BLK;
+
+    buf = read_block(blk_no);
+    printf("3:blk_no: %d\n", blk_no);
+    ip = malloc(INODE_SIZE);
+    memcpy(ip, buf + blk_off * INODE_SIZE, INODE_SIZE);
+    free(buf);
+    return ip;
+}
 
 void print_imode(u16 mode) {
     // extract the file type from the high 4 bits
@@ -90,29 +148,6 @@ void print_time(char *str, time_t time_t) {
     timeinfo = localtime(&time_t);
     strftime(buffer, sizeof(buffer), "%a %b %e %H:%M:%S %Y", timeinfo);
     printf("%-30s = %s\n", str, buffer);
-}
-
-/*
- * read a block data to a malloced buf, do not forget free it after used
- */
-char *read_block(int blk_no) {
-    char *buf;
-    if (lseek(fd, BLOCK_SIZE * blk_no, SEEK_SET) < 0) {
-        goto err;
-    }
-    if ((buf = malloc(BLOCK_SIZE)) == NULL) {
-        goto err;
-    }
-    if ((read(fd, buf, BLOCK_SIZE)) != BLOCK_SIZE) {
-        free(buf);
-        goto err;
-    }
-    return buf;
-
-    err:
-    perror("read_block");
-    close(fd);
-    exit(EXIT_FAILURE);
 }
 
 
@@ -279,30 +314,32 @@ void ls_entry(int block_no) {
 
 void ls_dirs(int block_no) {
     struct ext2_inode *ip;
-    int inode_size = fs_info.super_block->s_inode_size;
-    int inodes_per_block = BLOCK_SIZE / inode_size;
     int it = block_no;
     char *buf;
     printf("--------------------------- [B%d]DIRS\n", block_no);
-    int i_index = 1;
-    int b_offset = i_index / inodes_per_block;
-    int i_offset = i_index % inodes_per_block;
-    buf = read_block(it + b_offset);
-    ip = (struct ext2_inode *) (buf + i_offset * inode_size);
-    print_imode(ip->i_mode);
-    print_int("i_uid", ip->i_uid);
-    print_int("i_gid", ip->i_gid);
-    print_int("i_size", ip->i_size);
-    print_time("i_ctime", (time_t) ip->i_ctime);
-    print_int("i_links_count", ip->i_links_count);
-    for (int j = 0; j < 15; ++j) {
-        if (ip->i_block[j]) {
-            printf("i_block[%d] = %d\n", j, ip->i_block[j]);
-            ls_entry((int) ip->i_block[j]);
+    for (int i = 1; i < INODE_PER_BLK; ++i) {
+        int b_offset = i / INODE_PER_BLK;
+        int i_offset = i % INODE_PER_BLK;
+        printf("%d\n", it + b_offset);
+        buf = read_block(it + b_offset);
+        printf("i_offset: %d\n", i_offset);
+        ip = (struct ext2_inode *) (buf + i_offset * INODE_SIZE);
+        print_imode(ip->i_mode);
+        print_int("inode", i);
+        print_int("i_uid", ip->i_uid);
+        print_int("i_gid", ip->i_gid);
+        print_int("i_size", ip->i_size);
+        print_time("i_ctime", (time_t) ip->i_ctime);
+        print_int("i_links_count", ip->i_links_count);
+        for (int j = 0; j < 15; ++j) {
+            if (ip->i_block[j]) {
+                printf("i_block[%d] = %d\n", j, ip->i_block[j]);
+                ls_entry((int) ip->i_block[j]);
+            }
         }
+        free(buf);
+        printf("\n");
     }
-    free(buf);
-    printf("\n");
 }
 
 void info_init(char *dev) {
@@ -339,6 +376,67 @@ void info_init(char *dev) {
     exit(EXIT_FAILURE);
 }
 
+struct ext2_inode *
+search_inode(struct ext2_inode *ip, char *token) {
+    char *buf, *cp;
+    struct ext2_dir_entry *dp = NULL;
+    struct ext2_inode *res_ip = NULL;
+    for (int i = 0; i < (int) ip->i_blocks; ++i) {
+        if (ip->i_block[i]) {
+            buf = read_block((int) ip->i_block[i]);
+            cp = buf;
+            dp = (struct ext2_dir_entry *) buf;
+            while (cp < buf + BLOCK_SIZE) {
+                char d_name[dp->name_len + 1];
+                memcpy(d_name, dp->name, dp->name_len);
+                d_name[dp->name_len] = 0;
+                if (strcmp(d_name, token) == 0) {
+                    printf("1:got: %s\n", d_name);
+                    printf("2:dp->inode: %d\n", dp->inode);
+                    res_ip = get_inode(1, (int) dp->inode);
+                    break;
+                }
+                cp += dp->rec_len;
+                dp = (struct ext2_dir_entry *) cp;
+            }
+            free(buf);
+            if (res_ip) {
+                return res_ip;
+            }
+        }
+    }
+    return NULL;
+}
+
+struct ext2_inode *
+path2inode(char *path) {
+    char *token;
+    struct ext2_inode *ip = NULL, *tmp_ip = NULL;
+
+    ip = get_inode(1, 2);
+    token = strtok(path, "/");
+    while (token != NULL) {
+        printf("search: %s\n", token);
+        print_imode(ip->i_mode);
+        tmp_ip = search_inode(ip, token);
+        if (ip) {
+            free(ip);
+        }
+        printf("path2inode1\n");
+        if (!tmp_ip) {
+            printf("path2inode2\n");
+            return NULL;
+        } else {
+            printf("search success: %s\n", token);
+            for (int i = 0; i < 15; ++i) {
+                printf("tmp_ip->i_block[%d]: %d\n", i, tmp_ip->i_block[i]);
+            }
+        }
+        ip = tmp_ip;
+        token = strtok(NULL, "/");
+    }
+    return ip;
+}
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
@@ -350,6 +448,18 @@ int main(int argc, char *argv[]) {
     ls_boot_block();
     ls_super_block();
     ls_group_desc();
+
+
+    char path[20] = "a/hi.c";
+    printf("start search: %s\n", path);
+    struct ext2_inode *p = path2inode(path);
+    if (p == NULL) {
+        printf("not found: %s\n", path);
+    } else {
+        print_int("p->i_mode", (int) p->i_mode);
+    }
+    free(p);
+
 //    ls_imap();
 //    ls_bmap();
 //    ls_dirs();
